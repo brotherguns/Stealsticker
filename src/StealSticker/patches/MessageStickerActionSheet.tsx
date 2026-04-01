@@ -1,8 +1,8 @@
 import { React } from "@vendetta/metro/common";
-import { after, before, instead } from "@vendetta/patcher";
+import { after, instead } from "@vendetta/patcher";
 import { findInReactTree } from "@vendetta/utils";
 import { General } from "@vendetta/ui/components";
-import { LazyActionSheet, messageUtil, SelectedChannelStore } from "../modules";
+import { LazyActionSheet } from "../modules";
 import StickerButtons from "../ui/components/StickerButtons";
 import openMediaModal from "../lib/utils/openMediaModal";
 import { getStickerUrl } from "../lib/utils/getStickerUrl";
@@ -10,35 +10,6 @@ import { findByProps } from "@vendetta/metro";
 
 var { TouchableOpacity } = General;
 
-// ── Batched debug — collects lines, flushes every 3s as one message ──
-var DEBUG = true;
-var _dbgBuffer: string[] = [];
-var _dbgTimer: any = null;
-
-function dbg(...parts: any[]) {
-    if (!DEBUG) return;
-    _dbgBuffer.push("[SS] " + parts.map(String).join(" "));
-    if (!_dbgTimer) {
-        _dbgTimer = setTimeout(flushDbg, 3000);
-    }
-}
-
-function flushDbg() {
-    _dbgTimer = null;
-    if (_dbgBuffer.length === 0) return;
-    try {
-        var channelId = SelectedChannelStore?.getChannelId?.();
-        if (channelId && messageUtil?.sendBotMessage) {
-            messageUtil.sendBotMessage(
-                channelId,
-                "```\n" + _dbgBuffer.join("\n") + "\n```"
-            );
-        }
-    } catch (_) {}
-    _dbgBuffer = [];
-}
-
-// ── Track patched modules so we don't double-wrap ────────────────────
 var _patchedModules = new WeakSet();
 
 var DirectSheet =
@@ -47,14 +18,11 @@ var DirectSheet =
     findByProps("StickerActionSheet");
 
 export default function patchMessageStickerActionSheet() {
-    dbg("v5 loaded");
-
     if (DirectSheet) {
         return patchSheet("default", DirectSheet);
     }
 
     if (!LazyActionSheet?.openLazy) {
-        dbg("FATAL: no openLazy");
         return function() {};
     }
 
@@ -69,19 +37,14 @@ export default function patchMessageStickerActionSheet() {
             var context: any = args[2];
 
             var nameLower = (name || "").toLowerCase();
-            // Must contain "sticker" but NOT be our own AddToServer sheet
             if (!nameLower.includes("sticker") || nameLower.includes("addtoserver")) {
                 return originalOpenLazy.apply(this, args);
             }
-
-            dbg("Intercepted:", name);
 
             var sticker: StickerNode | undefined =
                 context?.renderableSticker ??
                 context?.sticker ??
                 context?.stickerNode;
-
-            dbg("Sticker:", sticker ? sticker.name + " #" + sticker.id : "NULL");
 
             if (!lazySheet || typeof lazySheet.then !== "function") {
                 return originalOpenLazy.apply(this, args);
@@ -90,22 +53,13 @@ export default function patchMessageStickerActionSheet() {
             var patchedPromise = lazySheet.then(function(module: any) {
                 var target = module.default;
 
-                // ── Skip if already patched ──────────────────────────
                 if (_patchedModules.has(module)) {
-                    dbg("Module already patched, skipping wrap");
-                    // Still update the sticker ref for this invocation
                     if (module._ssCurrentSticker !== undefined) {
                         module._ssCurrentSticker = sticker;
                     }
                     return module;
                 }
 
-                dbg("module.default type:", typeof target);
-                if (typeof target === "object" && target !== null) {
-                    dbg("keys:", Object.keys(target).join(", "));
-                }
-
-                // ── Find the actual render function ──────────────────
                 var renderFn: Function | null = null;
                 var renderHost: any = null;
                 var renderKey: string = "";
@@ -119,23 +73,19 @@ export default function patchMessageStickerActionSheet() {
                         renderFn = target.type;
                         renderHost = target;
                         renderKey = "type";
-                        dbg("Patching .type (React.memo)");
                     } else if (typeof target.render === "function") {
                         renderFn = target.render;
                         renderHost = target;
                         renderKey = "render";
-                        dbg("Patching .render (forwardRef)");
                     } else if (typeof target.type === "object" && target.type !== null) {
                         if (typeof target.type.render === "function") {
                             renderFn = target.type.render;
                             renderHost = target.type;
                             renderKey = "render";
-                            dbg("Patching .type.render (memo+forwardRef)");
                         } else if (typeof target.type.type === "function") {
                             renderFn = target.type.type;
                             renderHost = target.type;
                             renderKey = "type";
-                            dbg("Patching .type.type");
                         }
                     }
                     if (!renderFn) {
@@ -144,7 +94,6 @@ export default function patchMessageStickerActionSheet() {
                                 renderFn = target[k];
                                 renderHost = target;
                                 renderKey = k;
-                                dbg("Patching ." + k + " (scan)");
                                 break;
                             }
                         }
@@ -152,22 +101,17 @@ export default function patchMessageStickerActionSheet() {
                 }
 
                 if (!renderFn || !renderHost) {
-                    dbg("No render function found");
                     return module;
                 }
 
-                // Store sticker ref on module so re-opens get fresh data
                 module._ssCurrentSticker = sticker;
 
                 var OriginalRender = renderFn;
                 renderHost[renderKey] = function PatchedStickerRender() {
-                    dbg("PatchedStickerRender called");
-
                     var res: any;
                     try {
                         res = OriginalRender.apply(this, arguments);
                     } catch (e: any) {
-                        dbg("Original threw:", e?.message);
                         throw e;
                     }
 
@@ -181,16 +125,13 @@ export default function patchMessageStickerActionSheet() {
                     if (finalSticker && res) {
                         try {
                             injectButtons(res, finalSticker);
-                        } catch (e: any) {
-                            dbg("inject error:", e?.message);
-                        }
+                        } catch (_) {}
                     }
 
                     return res;
                 };
 
                 _patchedModules.add(module);
-                dbg("Module patched successfully");
                 return module;
             });
 
@@ -202,17 +143,13 @@ export default function patchMessageStickerActionSheet() {
     return function() { patches.forEach(function(p) { p?.(); }); };
 }
 
-// ── Button injection ─────────────────────────────────────────────────
 function injectButtons(res: any, sticker: StickerNode) {
     if (!res) return;
-
-    // Dedup: skip if already injected into this exact tree
     if (res._ssInjected) return;
     res._ssInjected = true;
 
     var stickerUrl = getStickerUrl(sticker);
 
-    // Strategy 1: nested view with a FUNCTION .type (not another memo object)
     var view = res?.props?.children?.props?.children;
     if (view && typeof view === "object" && typeof view.type === "function") {
         var unpatchView = after("type", view, function(_: any, component: any) {
@@ -222,7 +159,6 @@ function injectButtons(res: any, sticker: StickerNode) {
         return;
     }
 
-    // Strategy 2: res.type is a function
     if (res?.type && typeof res.type === "function") {
         var origType = res.type;
         res.type = function() {
@@ -234,7 +170,6 @@ function injectButtons(res: any, sticker: StickerNode) {
         return;
     }
 
-    // Strategy 3: children render prop
     if (typeof res?.props?.children === "function") {
         var origRender = res.props.children;
         res.props.children = function() {
@@ -245,7 +180,6 @@ function injectButtons(res: any, sticker: StickerNode) {
         return;
     }
 
-    // Strategy 4: brute append
     appendToTree(res, <StickerButtons sticker={sticker} />);
 }
 
