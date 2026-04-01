@@ -4,7 +4,7 @@ import { createHash } from "crypto";
 
 await mkdir("dist", { recursive: true });
 
-// Step 1: bundle all internal modules, leaving @vendetta/* as external require() calls
+// Step 1: Bundle — keep @vendetta/* external, we provide them via a require shim
 await build({
     entryPoints: ["src/StealSticker/index.ts"],
     bundle: true,
@@ -14,33 +14,45 @@ await build({
     jsx: "transform",
     jsxFactory: "React.createElement",
     jsxFragment: "React.Fragment",
+
+    // ─── Hermes compatibility ───────────────────────────────────────────────
+    // Hermes syntactically accepts const/let but treats them as var,
+    // which silently breaks closures (e.g. loop callbacks capture the
+    // wrong binding). Force all const/let → var here so esbuild handles
+    // it correctly at bundle time.
+    //
+    // Reference: Kettu's own build script comments and SWC config:
+    //   "transform-block-scoping", "transform-async-to-generator"
+    supported: {
+        // Hermes treats const/let as var — broken closures in loops
+        "const-and-let": false,
+        // Hermes does NOT support async/await — must lower to generators
+        "async-await": false,
+    },
+    // ────────────────────────────────────────────────────────────────────────
+
     logLevel: "info",
 });
 
-// Step 2: wrap the CJS bundle so it works inside Kettu's eval.
+// Step 2: Wrap the CJS bundle in an IIFE that Kettu's eval can handle.
 //
-// Kettu evaluates Vendetta plugins as:
+// Kettu (VdPluginManager.evalPlugin) evaluates Vendetta plugins as:
 //
 //   const pluginString = `vendetta=>{return ${plugin.js}}`;
 //   const raw = eval(pluginString)(vendettaObject);
 //
-// Problem A — syntax:
-//   CJS output is a sequence of statements (var decls, assignments).
-//   You can't `return` a statement — it causes a SyntaxError, the plugin
-//   silently fails to enable, and gets disabled immediately.
+// Problem A — CJS is statements, not an expression:
+//   `return var __defProp = ...` is a SyntaxError.
+//   The eval throws, startPlugin's catch fires, plugin.enabled = false.
 //
-// Problem B — require():
-//   The CJS bundle has bare require("@vendetta/metro") etc. calls.
-//   Kettu doesn't register those paths as Metro modules; it exposes
-//   everything through the `vendetta` object it passes in.
+// Problem B — require("@vendetta/*") has no resolver at eval time:
+//   Kettu exposes the whole API through the `vendetta` param, not via
+//   Node/Metro module IDs. We provide a shim that maps the IDs to the
+//   matching vendetta.* property.
 //
-// Fix: wrap the whole bundle in an IIFE (a valid expression) that
-//   - sets up `module` / `exports` for the CJS runtime
-//   - provides a require() shim that maps @vendetta/* → vendetta.*
-//   - returns the plugin's default export at the end
-//
-// `vendetta` is a free variable inside the IIFE — it's resolved from
-// the outer closure that Kettu's arrow function creates.
+// Fix: wrap the CJS bundle in an IIFE (a valid expression that returns
+//   the plugin object) and inject the require shim inside it.
+//   `vendetta` is a free variable — it's in scope from Kettu's wrapper.
 
 const cjs = await readFile("dist/index.js", "utf8");
 
@@ -68,6 +80,10 @@ const wrapped = `(function () {
                 return vendetta.ui.toasts;
             case "@vendetta/ui/components":
                 return vendetta.ui.components;
+            case "@vendetta/storage":
+                return vendetta.storage;
+            case "@vendetta/commands":
+                return vendetta.commands;
             default:
                 throw new Error("[StealSticker] Unknown module: " + id);
         }
@@ -75,8 +91,8 @@ const wrapped = `(function () {
 
 ${cjs}
 
-    // module.exports.default is a lazy getter esbuild sets up via __export,
-    // so by the time we reach here index_default is fully assigned.
+    // module.exports.default is a lazy getter set up by esbuild's __export,
+    // so by the time we reach here the default export is fully assigned.
     return module.exports && module.exports.default !== undefined
         ? module.exports.default
         : module.exports;
@@ -84,10 +100,10 @@ ${cjs}
 
 await writeFile("dist/index.js", wrapped);
 
-// Step 3: hash the final file.
-// Kettu skips downloading JS when hash matches the stored one.
-// Without this, it would never fetch — see VdPluginManager.fetchPlugin:
-//   if (existingPlugin?.manifest.hash !== pluginManifest.hash) { fetch... }
+// Step 3: Hash the final file.
+// Kettu skips re-downloading JS when manifest.hash === stored hash.
+// Without a hash, existingPlugin?.manifest.hash !== pluginManifest.hash
+// is always undefined !== undefined → false → skips fetch → crashes.
 const hash = createHash("sha256").update(wrapped).digest("hex");
 
 const manifest = JSON.parse(
