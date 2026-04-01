@@ -16,24 +16,41 @@ const DirectSheet = findByProps("StickerDetails") ?? findByProps("stickerActionS
 export default function patchMessageStickerActionSheet() {
     if (DirectSheet) return patchSheet("default", DirectSheet);
 
-    // Newer builds: intercept openLazy and look for the right sheet name
     const patches: (() => void)[] = [];
 
-    const unpatchLazy = before("openLazy", LazyActionSheet, ([lazySheet, name]: [any, string]) => {
+    const unpatchLazy = before("openLazy", LazyActionSheet, ([lazySheet, name, context]: [any, string, any]) => {
+        // Support all known sheet names across Discord versions
         if (
             name !== "MessageStickerActionSheet" &&
             name !== "StickerActionSheet" &&
-            name !== "StickersActionSheet"
+            name !== "StickersActionSheet" &&
+            name !== "sticker_detail_action_sheet"
         ) return;
 
-        unpatchLazy();
+        // Newer builds pass sticker as context arg to openLazy
+        // rather than as props to the component
+        const sticker: StickerNode | undefined =
+            context?.renderableSticker ??
+            context?.sticker ??
+            context?.stickerNode;
 
         lazySheet.then((module: any) => {
-            patches.push(
-                after("default", module, (_, res) => {
-                    patches.push(patchSheet("type", res, true));
-                })
-            );
+            const unpatchModule = after("default", module, ([props]: [any], res: any) => {
+                // Older builds pass sticker via component props instead
+                const stickerNode: StickerNode | undefined =
+                    sticker ??
+                    props?.sticker ??
+                    props?.stickerNode ??
+                    props?.renderableSticker;
+
+                if (!stickerNode) return;
+
+                const stickerUrl = getStickerUrl(stickerNode);
+
+                injectIntoResult(res, stickerNode, stickerUrl);
+            });
+
+            patches.push(unpatchModule);
         });
     });
 
@@ -43,6 +60,42 @@ export default function patchMessageStickerActionSheet() {
     };
 }
 
+function injectIntoResult(res: any, sticker: StickerNode, stickerUrl: string | null) {
+    const view = res?.props?.children?.props?.children;
+    if (!view) return;
+
+    const unpatchView = after("type", view, (_, component: any) => {
+        React.useEffect(() => unpatchView, []);
+
+        // Tap the sticker image to open it full screen
+        if (stickerUrl) {
+            const isIcon = (c: any) => c?.props?.source?.uri;
+            const iconContainer = findInReactTree(component, (c: any) => c?.find?.(isIcon));
+            const iconIdx = iconContainer?.findIndex?.(isIcon) ?? -1;
+            if (iconIdx >= 0) {
+                iconContainer[iconIdx] = (
+                    <TouchableOpacity onPress={() => openMediaModal(stickerUrl.split("?")[0])}>
+                        {iconContainer[iconIdx]}
+                    </TouchableOpacity>
+                );
+            }
+        }
+
+        // Inject steal buttons after the last Button in the sheet
+        const isButton = (c: any) => c?.type?.name === "Button";
+        const btnContainer = findInReactTree(component, (c: any) => c?.find?.(isButton));
+        const btnIdx = btnContainer?.findLastIndex?.(isButton) ?? -1;
+
+        const el = <StickerButtons sticker={sticker} />;
+
+        if (btnIdx >= 0) {
+            btnContainer.splice(btnIdx + 1, 0, el);
+        } else {
+            component?.props?.children?.push?.(el);
+        }
+    });
+}
+
 function patchSheet(funcName: string, sheetModule: any, once = false) {
     const unpatch = after(
         funcName,
@@ -50,46 +103,12 @@ function patchSheet(funcName: string, sheetModule: any, once = false) {
         ([props]: [any], res: any) => {
             React.useEffect(() => () => void (once && unpatch()), []);
 
-            // Discord uses "sticker" or "stickerNode" depending on the build
             const sticker: StickerNode | undefined =
-                props?.sticker ?? props?.stickerNode;
+                props?.sticker ?? props?.stickerNode ?? props?.renderableSticker;
             if (!sticker) return;
 
             const stickerUrl = getStickerUrl(sticker);
-
-            const view = res?.props?.children?.props?.children;
-            if (!view) return;
-
-            const unpatchView = after("type", view, (_, component: any) => {
-                React.useEffect(() => unpatchView, []);
-
-                // Tap the sticker image to open it full screen
-                if (stickerUrl) {
-                    const isIcon = (c: any) => c?.props?.source?.uri;
-                    const iconContainer = findInReactTree(component, (c: any) => c?.find?.(isIcon));
-                    const iconIdx = iconContainer?.findIndex?.(isIcon) ?? -1;
-                    if (iconIdx >= 0) {
-                        iconContainer[iconIdx] = (
-                            <TouchableOpacity onPress={() => openMediaModal(stickerUrl.split("?")[0])}>
-                                {iconContainer[iconIdx]}
-                            </TouchableOpacity>
-                        );
-                    }
-                }
-
-                // Inject steal buttons after the last Button in the sheet
-                const isButton = (c: any) => c?.type?.name === "Button";
-                const btnContainer = findInReactTree(component, (c: any) => c?.find?.(isButton));
-                const btnIdx = btnContainer?.findLastIndex?.(isButton) ?? -1;
-
-                const el = <StickerButtons sticker={sticker} />;
-
-                if (btnIdx >= 0) {
-                    btnContainer.splice(btnIdx + 1, 0, el);
-                } else {
-                    component?.props?.children?.push?.(el);
-                }
-            });
+            injectIntoResult(res, sticker, stickerUrl);
         }
     );
 
