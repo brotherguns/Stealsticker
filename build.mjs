@@ -1,6 +1,7 @@
 import { build } from "esbuild";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { createHash } from "crypto";
+import swc from "@swc/core";
 
 await mkdir("dist", { recursive: true });
 
@@ -11,27 +12,72 @@ await build({
     outfile: "dist/index.js",
     format: "cjs",
     external: ["@vendetta", "@vendetta/*"],
-    jsx: "transform",
-    jsxFactory: "React.createElement",
-    jsxFragment: "React.Fragment",
-
-    // ─── Hermes compatibility ───────────────────────────────────────────────
-    // Hermes syntactically accepts const/let but treats them as var,
-    // which silently breaks closures (e.g. loop callbacks capture the
-    // wrong binding). Force all const/let → var here so esbuild handles
-    // it correctly at bundle time.
-    //
-    // Reference: Kettu's own build script comments and SWC config:
-    //   "transform-block-scoping", "transform-async-to-generator"
-    supported: {
-        // Hermes treats const/let as var — broken closures in loops
-        "const-and-let": false,
-        // Hermes does NOT support async/await — must lower to generators
-        "async-await": false,
-    },
-    // ────────────────────────────────────────────────────────────────────────
-
     logLevel: "info",
+
+    // ─── SWC plugin ──────────────────────────────────────────────────────────
+    // esbuild 0.20.x cannot lower const/let → var via the `supported` API
+    // when format is "cjs" (it only works via target:"es5" which over-transforms).
+    // Instead, run SWC on every file first — exactly what Kettu does — to handle:
+    //   • transform-block-scoping  (const/let → var, safe Hermes loop closures)
+    //   • transform-async-to-generator  (async/await → generators for Hermes)
+    // SWC also strips TypeScript types and transforms JSX with the classic pragma
+    // (React.createElement / React.Fragment) so esbuild receives plain JS.
+    plugins: [
+        {
+            name: "swc",
+            setup(build) {
+                build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async (args) => {
+                    const isTsx = args.path.endsWith(".tsx");
+                    const isTs  = args.path.endsWith(".ts") || isTsx;
+
+                    const result = await swc.transformFile(args.path, {
+                        jsc: {
+                            parser: {
+                                syntax: isTs ? "typescript" : "ecmascript",
+                                tsx: isTsx,
+                            },
+                            transform: {
+                                react: {
+                                    // Classic pragma so the existing
+                                    // `import { React } from "@vendetta/metro/common"`
+                                    // is used — no auto-import of react/jsx-runtime.
+                                    runtime: "classic",
+                                    pragma: "React.createElement",
+                                    pragmaFrag: "React.Fragment",
+                                },
+                            },
+                        },
+                        // https://github.com/facebook/hermes/blob/main/doc/Features.md
+                        env: {
+                            targets: "fully supports es6",
+                            include: [
+                                // Hermes treats const/let as var → broken loop closures
+                                "transform-block-scoping",
+                                // Hermes does NOT support async/await → lower to generators
+                                "transform-async-to-generator",
+                                "transform-async-generator-functions",
+                            ],
+                            exclude: [
+                                // All of these ARE supported by Hermes — don't transform
+                                "transform-parameters",
+                                "transform-template-literals",
+                                "transform-exponentiation-operator",
+                                "transform-named-capturing-groups-regex",
+                                "transform-nullish-coalescing-operator",
+                                "transform-object-rest-spread",
+                                "transform-optional-chaining",
+                                "transform-logical-assignment-operators",
+                            ],
+                        },
+                    });
+
+                    // Return plain JS — types and JSX are already gone
+                    return { contents: result.code, loader: "js" };
+                });
+            },
+        },
+    ],
+    // ─────────────────────────────────────────────────────────────────────────
 });
 
 // Step 2: Wrap the CJS bundle in an IIFE that Kettu's eval can handle.
@@ -43,16 +89,11 @@ await build({
 //
 // Problem A — CJS is statements, not an expression:
 //   `return var __defProp = ...` is a SyntaxError.
-//   The eval throws, startPlugin's catch fires, plugin.enabled = false.
 //
-// Problem B — require("@vendetta/*") has no resolver at eval time:
-//   Kettu exposes the whole API through the `vendetta` param, not via
-//   Node/Metro module IDs. We provide a shim that maps the IDs to the
-//   matching vendetta.* property.
+// Problem B — require("@vendetta/*") has no resolver at eval time.
 //
-// Fix: wrap the CJS bundle in an IIFE (a valid expression that returns
-//   the plugin object) and inject the require shim inside it.
-//   `vendetta` is a free variable — it's in scope from Kettu's wrapper.
+// Fix: wrap in an IIFE with a require shim. `vendetta` is in scope
+// from Kettu's wrapper.
 
 const cjs = await readFile("dist/index.js", "utf8");
 
@@ -91,8 +132,6 @@ const wrapped = `(function () {
 
 ${cjs}
 
-    // module.exports.default is a lazy getter set up by esbuild's __export,
-    // so by the time we reach here the default export is fully assigned.
     return module.exports && module.exports.default !== undefined
         ? module.exports.default
         : module.exports;
@@ -100,10 +139,7 @@ ${cjs}
 
 await writeFile("dist/index.js", wrapped);
 
-// Step 3: Hash the final file.
-// Kettu skips re-downloading JS when manifest.hash === stored hash.
-// Without a hash, existingPlugin?.manifest.hash !== pluginManifest.hash
-// is always undefined !== undefined → false → skips fetch → crashes.
+// Step 3: Hash the final file so Kettu knows when to re-fetch.
 const hash = createHash("sha256").update(wrapped).digest("hex");
 
 const manifest = JSON.parse(
