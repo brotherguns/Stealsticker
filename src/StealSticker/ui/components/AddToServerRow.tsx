@@ -1,4 +1,3 @@
-import { React } from "@vendetta/metro/common";
 import { getAssetIDByName } from "@vendetta/ui/assets";
 import { Forms } from "@vendetta/ui/components";
 import { showToast } from "@vendetta/ui/toasts";
@@ -8,7 +7,6 @@ import {
     GuildIcon,
     GuildIconSizes,
     LazyActionSheet,
-    StickerStore,
 } from "../../modules";
 
 var FormRow = Forms?.FormRow;
@@ -34,10 +32,6 @@ function getUploadUrl(sticker: StickerNode): string | null {
     }
 }
 
-function getMaxStickerSlots(guild: any): number {
-    return [5, 15, 30, 60][guild.premium_tier ?? 0] ?? 5;
-}
-
 export default function AddToServerRow({
     guild,
     sticker,
@@ -50,13 +44,6 @@ export default function AddToServerRow({
     var uploadUrl = getUploadUrl(sticker);
     var ext = getStickerExtension(sticker);
     var mime = MIME_MAP[sticker.format_type] ?? "image/png";
-
-    var slotsAvailable = React.useMemo(function() {
-        var max = getMaxStickerSlots(guild);
-        var existing: any[] =
-            StickerStore?.getStickersByGuildId?.(guild.id) ?? [];
-        return existing.length < max;
-    }, []);
 
     var addToServer = async function() {
         LazyActionSheet?.hideActionSheet?.();
@@ -104,9 +91,7 @@ export default function AddToServerRow({
     return (
         <FormRow
             leading={GuildIcon ? <GuildIcon guild={guild} size={GuildIconSizes?.MEDIUM} animate={false} /> : undefined}
-            disabled={!slotsAvailable}
             label={guild.name}
-            subLabel={!slotsAvailable ? "No sticker slots available" : undefined}
             trailing={FormIcon ? <FormIcon style={{ opacity: 1 }} source={getAssetIDByName("ic_add_24px")} /> : undefined}
             onPress={addToServer}
         />
