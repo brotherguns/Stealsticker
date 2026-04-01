@@ -66,18 +66,14 @@ export default function AddToServerRow({
                 return;
             }
 
-            var resp = await fetch(uploadUrl);
-            if (!resp.ok) {
-                showToast("Failed to download sticker", getAssetIDByName("Small"));
-                return;
-            }
-
-            // Get raw bytes and create blob with explicit MIME type
-            var arrayBuf = await resp.arrayBuffer();
-            var blob = new Blob([arrayBuf], { type: mime });
-
+            // React Native FormData: { uri, type, name } tells RN to
+            // stream the file from the URL during upload — no manual download needed
             var form = new FormData();
-            form.append("file", blob, sticker.name + "." + ext);
+            form.append("file", {
+                uri: uploadUrl,
+                type: mime,
+                name: sticker.name + "." + ext,
+            } as any);
             form.append("name", sticker.name);
             form.append("description", sticker.description ?? sticker.name);
             form.append("tags", sticker.tags?.split(",")?.[0]?.trim() || "⭐");
