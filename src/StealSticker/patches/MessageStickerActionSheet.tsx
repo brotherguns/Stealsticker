@@ -69,7 +69,8 @@ export default function patchMessageStickerActionSheet() {
             var context: any = args[2];
 
             var nameLower = (name || "").toLowerCase();
-            if (!nameLower.includes("sticker")) {
+            // Must contain "sticker" but NOT be our own AddToServer sheet
+            if (!nameLower.includes("sticker") || nameLower.includes("addtoserver")) {
                 return originalOpenLazy.apply(this, args);
             }
 
