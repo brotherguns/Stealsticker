@@ -11,10 +11,10 @@ import {
     StickerStore,
 } from "../../modules";
 
-const { FormRow, FormIcon } = Forms;
+var FormRow = Forms?.FormRow;
+var FormIcon = Forms?.FormIcon;
 
 function getMaxStickerSlots(guild: any): number {
-    // Boost tier 0→5, 1→15, 2→30, 3→60
     return [5, 15, 30, 60][guild.premium_tier ?? 0] ?? 5;
 }
 
@@ -25,43 +25,45 @@ export default function AddToServerRow({
     guild: any;
     sticker: StickerNode;
 }) {
-    const url = getStickerUrl(sticker)!;
-    const ext = getStickerExtension(sticker)!;
+    if (!FormRow) return null;
 
-    const slotsAvailable = React.useMemo(() => {
-        const max = getMaxStickerSlots(guild);
-        const existing: any[] =
+    var url = getStickerUrl(sticker)!;
+    var ext = getStickerExtension(sticker)!;
+
+    var slotsAvailable = React.useMemo(function() {
+        var max = getMaxStickerSlots(guild);
+        var existing: any[] =
             StickerStore?.getStickersByGuildId?.(guild.id) ?? [];
         return existing.length < max;
     }, []);
 
-    const addToServer = async () => {
-        LazyActionSheet.hideActionSheet();
+    var addToServer = async function() {
+        LazyActionSheet?.hideActionSheet?.();
         try {
-            const resp = await fetch(url);
-            const blob = await resp.blob();
+            var resp = await fetch(url);
+            var blob = await resp.blob();
 
-            const form = new FormData();
-            form.append("file", blob, `${sticker.name}.${ext}`);
+            var form = new FormData();
+            form.append("file", blob, sticker.name + "." + ext);
             form.append("name", sticker.name);
             form.append("description", sticker.description ?? sticker.name);
             form.append("tags", sticker.tags?.split(",")?.[0]?.trim() || "⭐");
 
-            const token = AuthenticationStore.getToken();
-            const res = await fetch(
-                `https://discord.com/api/v10/guilds/${guild.id}/stickers`,
+            var token = AuthenticationStore?.getToken?.();
+            var res = await fetch(
+                "https://discord.com/api/v10/guilds/" + guild.id + "/stickers",
                 { method: "POST", headers: { Authorization: token }, body: form }
             );
 
             if (res.ok) {
                 showToast(
-                    `Added ${sticker.name} to ${guild.name}`,
+                    "Added " + sticker.name + " to " + guild.name,
                     getAssetIDByName("Check")
                 );
             } else {
-                const err = await res.json().catch(() => ({}));
+                var err = await res.json().catch(function() { return {}; });
                 showToast(
-                    err?.message ?? `Failed to add to ${guild.name}`,
+                    err?.message ?? "Failed to add to " + guild.name,
                     getAssetIDByName("Small")
                 );
             }
@@ -72,11 +74,11 @@ export default function AddToServerRow({
 
     return (
         <FormRow
-            leading={<GuildIcon guild={guild} size={GuildIconSizes.MEDIUM} animate={false} />}
+            leading={GuildIcon ? <GuildIcon guild={guild} size={GuildIconSizes?.MEDIUM} animate={false} /> : undefined}
             disabled={!slotsAvailable}
             label={guild.name}
             subLabel={!slotsAvailable ? "No sticker slots available" : undefined}
-            trailing={<FormIcon style={{ opacity: 1 }} source={getAssetIDByName("ic_add_24px")} />}
+            trailing={FormIcon ? <FormIcon style={{ opacity: 1 }} source={getAssetIDByName("ic_add_24px")} /> : undefined}
             onPress={addToServer}
         />
     );
