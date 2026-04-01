@@ -206,11 +206,15 @@ export default function patchMessageStickerActionSheet() {
 function injectButtons(res: any, sticker: StickerNode) {
     if (!res) return;
 
+    // Dedup: skip if already injected into this exact tree
+    if (res._ssInjected) return;
+    res._ssInjected = true;
+
     var stickerUrl = getStickerUrl(sticker);
 
-    // Strategy 1: nested view.type
+    // Strategy 1: nested view with a FUNCTION .type (not another memo object)
     var view = res?.props?.children?.props?.children;
-    if (view && typeof view === "object" && view.type) {
+    if (view && typeof view === "object" && typeof view.type === "function") {
         var unpatchView = after("type", view, function(_: any, component: any) {
             React.useEffect(function() { return unpatchView; }, []);
             addButtonsToComponent(component, sticker, stickerUrl);
