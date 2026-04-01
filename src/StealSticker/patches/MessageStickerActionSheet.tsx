@@ -1,29 +1,25 @@
-import { React } from "@metro/common";
-import { after, before } from "@lib/api/patcher";
-import { findByProps } from "@metro/wrappers";
-import { findInReactTree } from "@lib/utils/findInReactTree";
-import { ErrorBoundary } from "@lib/ui/components";
+import { React } from "@vendetta/metro/common";
+import { after, before } from "@vendetta/patcher";
+import { findInReactTree } from "@vendetta/utils";
+import { General } from "@vendetta/ui/components";
 import { LazyActionSheet } from "../modules";
 import StickerButtons from "../ui/components/StickerButtons";
 import openMediaModal from "../lib/utils/openMediaModal";
 import { getStickerUrl } from "../lib/utils/getStickerUrl";
+import { findByProps } from "@vendetta/metro";
 
-// Try to grab the sticker sheet directly — works on older builds
-const MessageStickerActionSheet = findByProps("StickerDetails") ??
-    findByProps("stickerActionSheet");
+const { TouchableOpacity } = General;
+
+// Try direct find first (older builds expose it this way)
+const DirectSheet = findByProps("StickerDetails") ?? findByProps("stickerActionSheet");
 
 export default function patchMessageStickerActionSheet() {
-    // If found directly, patch it
-    if (MessageStickerActionSheet) {
-        return patchSheet("default", MessageStickerActionSheet);
-    }
+    if (DirectSheet) return patchSheet("default", DirectSheet);
 
-    // Fallback: intercept openLazy and wait for the right sheet
+    // Newer builds: intercept openLazy and look for the right sheet name
     const patches: (() => void)[] = [];
 
-    const unpatchLazy = before("openLazy", LazyActionSheet, ([lazySheet, name]) => {
-        // Discord uses names like "MessageStickerActionSheet", "StickerActionSheet",
-        // or "StickersActionSheet" depending on build
+    const unpatchLazy = before("openLazy", LazyActionSheet, ([lazySheet, name]: [any, string]) => {
         if (
             name !== "MessageStickerActionSheet" &&
             name !== "StickerActionSheet" &&
@@ -51,11 +47,12 @@ function patchSheet(funcName: string, sheetModule: any, once = false) {
     const unpatch = after(
         funcName,
         sheetModule,
-        ([props]: [{ sticker?: StickerNode; stickerNode?: StickerNode }], res) => {
+        ([props]: [any], res: any) => {
             React.useEffect(() => () => void (once && unpatch()), []);
 
-            // Support both "sticker" and "stickerNode" prop names
-            const sticker = props?.sticker ?? props?.stickerNode;
+            // Discord uses "sticker" or "stickerNode" depending on the build
+            const sticker: StickerNode | undefined =
+                props?.sticker ?? props?.stickerNode;
             if (!sticker) return;
 
             const stickerUrl = getStickerUrl(sticker);
@@ -63,46 +60,34 @@ function patchSheet(funcName: string, sheetModule: any, once = false) {
             const view = res?.props?.children?.props?.children;
             if (!view) return;
 
-            const unpatchView = after("type", view, (_, component) => {
+            const unpatchView = after("type", view, (_, component: any) => {
                 React.useEffect(() => unpatchView, []);
 
-                // Make the sticker preview image open the media modal
+                // Tap the sticker image to open it full screen
                 if (stickerUrl) {
-                    const isIconComponent = (c: any) => c?.props?.source?.uri;
-                    const iconContainer = findInReactTree(
-                        component,
-                        (c: any) => c?.find?.(isIconComponent)
-                    );
-                    const iconIdx = iconContainer?.findIndex?.(isIconComponent) ?? -1;
+                    const isIcon = (c: any) => c?.props?.source?.uri;
+                    const iconContainer = findInReactTree(component, (c: any) => c?.find?.(isIcon));
+                    const iconIdx = iconContainer?.findIndex?.(isIcon) ?? -1;
                     if (iconIdx >= 0) {
                         iconContainer[iconIdx] = (
-                            <React.default.TouchableOpacity
-                                onPress={() => openMediaModal(stickerUrl.split("?")[0])}
-                            >
+                            <TouchableOpacity onPress={() => openMediaModal(stickerUrl.split("?")[0])}>
                                 {iconContainer[iconIdx]}
-                            </React.default.TouchableOpacity>
+                            </TouchableOpacity>
                         );
                     }
                 }
 
-                // Inject steal buttons after the last existing Button
+                // Inject steal buttons after the last Button in the sheet
                 const isButton = (c: any) => c?.type?.name === "Button";
-                const buttonsContainer = findInReactTree(
-                    component,
-                    (c: any) => c?.find?.(isButton)
-                );
-                const buttonIdx = buttonsContainer?.findLastIndex?.(isButton) ?? -1;
+                const btnContainer = findInReactTree(component, (c: any) => c?.find?.(isButton));
+                const btnIdx = btnContainer?.findLastIndex?.(isButton) ?? -1;
 
-                const stickerButtonsEl = (
-                    <ErrorBoundary>
-                        <StickerButtons sticker={sticker} />
-                    </ErrorBoundary>
-                );
+                const el = <StickerButtons sticker={sticker} />;
 
-                if (buttonIdx >= 0) {
-                    buttonsContainer.splice(buttonIdx + 1, 0, stickerButtonsEl);
+                if (btnIdx >= 0) {
+                    btnContainer.splice(btnIdx + 1, 0, el);
                 } else {
-                    component?.props?.children?.push?.(stickerButtonsEl);
+                    component?.props?.children?.push?.(el);
                 }
             });
         }

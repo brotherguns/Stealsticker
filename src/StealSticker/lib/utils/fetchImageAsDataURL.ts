@@ -3,12 +3,10 @@ export default function fetchImageAsDataURL(
     callback: (dataUrl: string) => void
 ) {
     fetch(url)
-        .then(resp => resp.blob())
+        .then(r => r.blob())
         .then(blob => {
             const reader = new FileReader();
             reader.readAsDataURL(blob);
-            reader.onloadend = () => {
-                callback(reader.result as string);
-            };
+            reader.onloadend = () => callback(reader.result as string);
         });
 }

@@ -1,0 +1,11 @@
+{
+  "name": "stealsticker",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.2"
+  }
+}

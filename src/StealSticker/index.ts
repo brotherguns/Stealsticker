@@ -7,8 +7,6 @@ export default {
         patches.push(patchMessageStickerActionSheet());
     },
     onUnload: () => {
-        for (const unpatch of patches) {
-            unpatch();
-        }
+        for (const unpatch of patches) unpatch();
     },
 };

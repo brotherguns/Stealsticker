@@ -1,13 +1,11 @@
-import { findByProps, findByStoreName } from "@metro/wrappers";
-import { findExports } from "@metro/finders";
-import { byName } from "@metro/filters";
+import { find, findByProps, findByStoreName } from "@vendetta/metro";
 
 export const LazyActionSheet = findByProps("openLazy", "hideActionSheet");
 export const MediaModalUtils = findByProps("openMediaModal");
 
 export const ActionSheet =
     findByProps("ActionSheet")?.ActionSheet ??
-    findExports(byName("ActionSheet"));
+    find((m: any) => m.render?.name === "ActionSheet");
 
 export const { ActionSheetTitleHeader, ActionSheetCloseButton } =
     findByProps("ActionSheetTitleHeader");
@@ -15,12 +13,13 @@ export const { ActionSheetTitleHeader, ActionSheetCloseButton } =
 export const { BottomSheetFlatList } = findByProps("BottomSheetScrollView");
 
 export const GuildStore = findByStoreName("GuildStore");
-export const StickerStore = findByStoreName("StickersStore") ??
-    findByStoreName("StickerStore");
+export const StickerStore =
+    findByStoreName("StickersStore") ?? findByStoreName("StickerStore");
 export const PermissionsStore = findByStoreName("PermissionStore");
 export const AuthenticationStore = findByStoreName("AuthenticationStore");
 
-export const { default: GuildIcon, GuildIconSizes } = findByProps("GuildIconSizes");
+export const { default: GuildIcon, GuildIconSizes } =
+    findByProps("GuildIconSizes");
 
 export const { downloadMediaAsset } = findByProps("downloadMediaAsset");
 

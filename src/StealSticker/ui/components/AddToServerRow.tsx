@@ -1,18 +1,21 @@
-import { React } from "@metro/common";
-import { findByProps } from "@metro/wrappers";
-import { showToast } from "@lib/ui/toasts";
-import { findAssetId } from "@lib/api/assets";
+import { React } from "@vendetta/metro/common";
+import { getAssetIDByName } from "@vendetta/ui/assets";
 import { Forms } from "@vendetta/ui/components";
-import { getStickerUrl, getStickerExtension } from "../../lib/utils/getStickerUrl";
-import { AuthenticationStore, GuildIcon, GuildIconSizes, LazyActionSheet, StickerStore } from "../../modules";
+import { showToast } from "@vendetta/ui/toasts";
+import { getStickerExtension, getStickerUrl } from "../../lib/utils/getStickerUrl";
+import {
+    AuthenticationStore,
+    GuildIcon,
+    GuildIconSizes,
+    LazyActionSheet,
+    StickerStore,
+} from "../../modules";
 
-const { FormRow, FormIcon } = findByProps("FormRow");
+const { FormRow, FormIcon } = Forms;
 
-// Max sticker slots by guild boost level
 function getMaxStickerSlots(guild: any): number {
-    const premiumTier = guild.premium_tier ?? 0;
-    // 0 → 5, 1 → 15, 2 → 30, 3 → 60
-    return [5, 15, 30, 60][premiumTier] ?? 5;
+    // Boost tier 0→5, 1→15, 2→30, 3→60
+    return [5, 15, 30, 60][guild.premium_tier ?? 0] ?? 5;
 }
 
 export default function AddToServerRow({
@@ -22,86 +25,58 @@ export default function AddToServerRow({
     guild: any;
     sticker: StickerNode;
 }) {
-    const stickerUrl = getStickerUrl(sticker)!;
+    const url = getStickerUrl(sticker)!;
     const ext = getStickerExtension(sticker)!;
 
     const slotsAvailable = React.useMemo(() => {
-        const maxSlots = getMaxStickerSlots(guild);
-        const guildStickers: any[] =
-            StickerStore?.getStickersByGuildId?.(guild.id) ??
-            Object.values(StickerStore?.getStickersByGuildIds?.([guild.id]) ?? {}) ??
-            [];
-        return guildStickers.length < maxSlots;
+        const max = getMaxStickerSlots(guild);
+        const existing: any[] =
+            StickerStore?.getStickersByGuildId?.(guild.id) ?? [];
+        return existing.length < max;
     }, []);
 
     const addToServer = async () => {
         LazyActionSheet.hideActionSheet();
-
         try {
-            // Fetch the sticker image
-            const resp = await fetch(stickerUrl);
+            const resp = await fetch(url);
             const blob = await resp.blob();
 
             const form = new FormData();
             form.append("file", blob, `${sticker.name}.${ext}`);
             form.append("name", sticker.name);
-            form.append(
-                "description",
-                sticker.description ?? sticker.name
-            );
-            // tags must be a single emoji or word — use first tag or fallback
-            const tag =
-                sticker.tags?.split(",")[0]?.trim() || "⭐";
-            form.append("tags", tag);
+            form.append("description", sticker.description ?? sticker.name);
+            form.append("tags", sticker.tags?.split(",")?.[0]?.trim() || "⭐");
 
             const token = AuthenticationStore.getToken();
-            const apiResp = await fetch(
+            const res = await fetch(
                 `https://discord.com/api/v10/guilds/${guild.id}/stickers`,
-                {
-                    method: "POST",
-                    headers: { Authorization: token },
-                    body: form,
-                }
+                { method: "POST", headers: { Authorization: token }, body: form }
             );
 
-            if (apiResp.ok) {
+            if (res.ok) {
                 showToast(
                     `Added ${sticker.name} to ${guild.name}`,
-                    findAssetId("Check")
+                    getAssetIDByName("Check")
                 );
             } else {
-                const err = await apiResp.json().catch(() => ({}));
+                const err = await res.json().catch(() => ({}));
                 showToast(
-                    err?.message ?? `Failed to add sticker to ${guild.name}`,
-                    findAssetId("Small")
+                    err?.message ?? `Failed to add to ${guild.name}`,
+                    getAssetIDByName("Small")
                 );
             }
         } catch (e: any) {
-            showToast(
-                e?.message ?? "Something went wrong",
-                findAssetId("Small")
-            );
+            showToast(e?.message ?? "Something went wrong", getAssetIDByName("Small"));
         }
     };
 
     return (
         <FormRow
-            leading={
-                <GuildIcon
-                    guild={guild}
-                    size={GuildIconSizes.MEDIUM}
-                    animate={false}
-                />
-            }
+            leading={<GuildIcon guild={guild} size={GuildIconSizes.MEDIUM} animate={false} />}
             disabled={!slotsAvailable}
             label={guild.name}
             subLabel={!slotsAvailable ? "No sticker slots available" : undefined}
-            trailing={
-                <FormIcon
-                    style={{ opacity: 1 }}
-                    source={findAssetId("ic_add_24px")}
-                />
-            }
+            trailing={<FormIcon style={{ opacity: 1 }} source={getAssetIDByName("ic_add_24px")} />}
             onPress={addToServer}
         />
     );
