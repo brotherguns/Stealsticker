@@ -2,7 +2,7 @@ import { React } from "@vendetta/metro/common";
 import { getAssetIDByName } from "@vendetta/ui/assets";
 import { Forms } from "@vendetta/ui/components";
 import { showToast } from "@vendetta/ui/toasts";
-import { getStickerExtension, getStickerUrl } from "../../lib/utils/getStickerUrl";
+import { getStickerExtension } from "../../lib/utils/getStickerUrl";
 import {
     AuthenticationStore,
     GuildIcon,
@@ -13,6 +13,26 @@ import {
 
 var FormRow = Forms?.FormRow;
 var FormIcon = Forms?.FormIcon;
+
+// Mime types for each format
+var MIME_MAP: Record<number, string> = {
+    1: "image/png",
+    2: "image/png",   // APNG is served as image/png
+    4: "image/gif",
+};
+
+// Use cdn.discordapp.com (not media.discordapp.net) for raw sticker files
+function getUploadUrl(sticker: StickerNode): string | null {
+    switch (sticker.format_type) {
+        case 1:
+        case 2:
+            return "https://cdn.discordapp.com/stickers/" + sticker.id + ".png";
+        case 4:
+            return "https://cdn.discordapp.com/stickers/" + sticker.id + ".gif";
+        default:
+            return null;
+    }
+}
 
 function getMaxStickerSlots(guild: any): number {
     return [5, 15, 30, 60][guild.premium_tier ?? 0] ?? 5;
@@ -27,8 +47,9 @@ export default function AddToServerRow({
 }) {
     if (!FormRow) return null;
 
-    var url = getStickerUrl(sticker)!;
-    var ext = getStickerExtension(sticker)!;
+    var uploadUrl = getUploadUrl(sticker);
+    var ext = getStickerExtension(sticker);
+    var mime = MIME_MAP[sticker.format_type] ?? "image/png";
 
     var slotsAvailable = React.useMemo(function() {
         var max = getMaxStickerSlots(guild);
@@ -40,8 +61,20 @@ export default function AddToServerRow({
     var addToServer = async function() {
         LazyActionSheet?.hideActionSheet?.();
         try {
-            var resp = await fetch(url);
-            var blob = await resp.blob();
+            if (!uploadUrl) {
+                showToast("Unsupported sticker format", getAssetIDByName("Small"));
+                return;
+            }
+
+            var resp = await fetch(uploadUrl);
+            if (!resp.ok) {
+                showToast("Failed to download sticker", getAssetIDByName("Small"));
+                return;
+            }
+
+            // Get raw bytes and create blob with explicit MIME type
+            var arrayBuf = await resp.arrayBuffer();
+            var blob = new Blob([arrayBuf], { type: mime });
 
             var form = new FormData();
             form.append("file", blob, sticker.name + "." + ext);
@@ -63,7 +96,7 @@ export default function AddToServerRow({
             } else {
                 var err = await res.json().catch(function() { return {}; });
                 showToast(
-                    err?.message ?? "Failed to add to " + guild.name,
+                    err?.message ?? "Failed (" + res.status + ")",
                     getAssetIDByName("Small")
                 );
             }
