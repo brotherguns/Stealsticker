@@ -1,0 +1,12 @@
+{
+  "id": "stealsticker",
+  "version": "1.0.0",
+  "type": "plugin",
+  "spec": 3,
+  "main": "index.js",
+  "display": {
+    "name": "StealSticker",
+    "description": "Steal stickers from messages on mobile with ease.",
+    "authors": [{ "name": "brotherguns" }]
+  }
+}
