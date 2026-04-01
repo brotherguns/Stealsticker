@@ -10,19 +10,36 @@ import { findByProps } from "@vendetta/metro";
 
 var { TouchableOpacity } = General;
 
+// ── Batched debug — collects lines, flushes every 3s as one message ──
 var DEBUG = true;
+var _dbgBuffer: string[] = [];
+var _dbgTimer: any = null;
+
 function dbg(...parts: any[]) {
     if (!DEBUG) return;
+    _dbgBuffer.push("[SS] " + parts.map(String).join(" "));
+    if (!_dbgTimer) {
+        _dbgTimer = setTimeout(flushDbg, 3000);
+    }
+}
+
+function flushDbg() {
+    _dbgTimer = null;
+    if (_dbgBuffer.length === 0) return;
     try {
         var channelId = SelectedChannelStore?.getChannelId?.();
         if (channelId && messageUtil?.sendBotMessage) {
             messageUtil.sendBotMessage(
                 channelId,
-                "```\n[SS] " + parts.map(String).join(" ") + "\n```"
+                "```\n" + _dbgBuffer.join("\n") + "\n```"
             );
         }
     } catch (_) {}
+    _dbgBuffer = [];
 }
+
+// ── Track patched modules so we don't double-wrap ────────────────────
+var _patchedModules = new WeakSet();
 
 var DirectSheet =
     findByProps("StickerDetails") ??
@@ -30,10 +47,9 @@ var DirectSheet =
     findByProps("StickerActionSheet");
 
 export default function patchMessageStickerActionSheet() {
-    dbg("v4 loaded");
+    dbg("v5 loaded");
 
     if (DirectSheet) {
-        dbg("Using DirectSheet path");
         return patchSheet("default", DirectSheet);
     }
 
@@ -72,24 +88,26 @@ export default function patchMessageStickerActionSheet() {
 
             var patchedPromise = lazySheet.then(function(module: any) {
                 var target = module.default;
-                dbg("module.default type:", typeof target);
 
-                if (typeof target === "object" && target !== null) {
-                    dbg("module.default keys:", Object.keys(target).join(", "));
-                    // React internals: $$typeof tells us what wrapper this is
-                    var typeofSym = target["$$typeof"];
-                    if (typeofSym) dbg("$$typeof:", String(typeofSym));
+                // ── Skip if already patched ──────────────────────────
+                if (_patchedModules.has(module)) {
+                    dbg("Module already patched, skipping wrap");
+                    // Still update the sticker ref for this invocation
+                    if (module._ssCurrentSticker !== undefined) {
+                        module._ssCurrentSticker = sticker;
+                    }
+                    return module;
                 }
 
-                // ── Find the actual render function inside the wrapper ──
-                // React.memo     → { $$typeof: Symbol(react.memo),        type: fn }
-                // React.forwardRef → { $$typeof: Symbol(react.forward_ref), render: fn }
-                // Plain function → fn itself
-                // Nested memo(forwardRef(...)) → { type: { render: fn } }
+                dbg("module.default type:", typeof target);
+                if (typeof target === "object" && target !== null) {
+                    dbg("keys:", Object.keys(target).join(", "));
+                }
 
+                // ── Find the actual render function ──────────────────
                 var renderFn: Function | null = null;
-                var renderHost: any = null;   // the object that holds the fn
-                var renderKey: string = "";   // the property name
+                var renderHost: any = null;
+                var renderKey: string = "";
 
                 if (typeof target === "function") {
                     renderFn = target;
@@ -97,40 +115,35 @@ export default function patchMessageStickerActionSheet() {
                     renderKey = "default";
                 } else if (typeof target === "object" && target !== null) {
                     if (typeof target.type === "function") {
-                        // React.memo(Component)
                         renderFn = target.type;
                         renderHost = target;
                         renderKey = "type";
-                        dbg("Found render fn on .type (React.memo)");
+                        dbg("Patching .type (React.memo)");
                     } else if (typeof target.render === "function") {
-                        // React.forwardRef(Component)
                         renderFn = target.render;
                         renderHost = target;
                         renderKey = "render";
-                        dbg("Found render fn on .render (React.forwardRef)");
+                        dbg("Patching .render (forwardRef)");
                     } else if (typeof target.type === "object" && target.type !== null) {
-                        // memo(forwardRef(...)) → type is the forwardRef object
                         if (typeof target.type.render === "function") {
                             renderFn = target.type.render;
                             renderHost = target.type;
                             renderKey = "render";
-                            dbg("Found render fn on .type.render (memo+forwardRef)");
+                            dbg("Patching .type.render (memo+forwardRef)");
                         } else if (typeof target.type.type === "function") {
                             renderFn = target.type.type;
                             renderHost = target.type;
                             renderKey = "type";
-                            dbg("Found render fn on .type.type (double memo)");
+                            dbg("Patching .type.type");
                         }
                     }
-
-                    // Last resort: scan all keys for a function
                     if (!renderFn) {
                         for (var k of Object.keys(target)) {
                             if (typeof target[k] === "function") {
                                 renderFn = target[k];
                                 renderHost = target;
                                 renderKey = k;
-                                dbg("Found render fn on ." + k + " (scan)");
+                                dbg("Patching ." + k + " (scan)");
                                 break;
                             }
                         }
@@ -138,15 +151,16 @@ export default function patchMessageStickerActionSheet() {
                 }
 
                 if (!renderFn || !renderHost) {
-                    dbg("Could not find render function, giving up");
+                    dbg("No render function found");
                     return module;
                 }
 
-                dbg("Patching", renderKey, "on host");
+                // Store sticker ref on module so re-opens get fresh data
+                module._ssCurrentSticker = sticker;
 
                 var OriginalRender = renderFn;
                 renderHost[renderKey] = function PatchedStickerRender() {
-                    dbg(">>> PatchedStickerRender CALLED");
+                    dbg("PatchedStickerRender called");
 
                     var res: any;
                     try {
@@ -158,24 +172,24 @@ export default function patchMessageStickerActionSheet() {
 
                     var props = arguments[0] ?? {};
                     var finalSticker: StickerNode | undefined =
-                        sticker ??
+                        module._ssCurrentSticker ??
                         props?.renderableSticker ??
                         props?.sticker ??
                         props?.stickerNode;
-
-                    dbg("Sticker:", finalSticker ? finalSticker.name : "NULL");
 
                     if (finalSticker && res) {
                         try {
                             injectButtons(res, finalSticker);
                         } catch (e: any) {
-                            dbg("injectButtons error:", e?.message);
+                            dbg("inject error:", e?.message);
                         }
                     }
 
                     return res;
                 };
 
+                _patchedModules.add(module);
+                dbg("Module patched successfully");
                 return module;
             });
 
@@ -187,35 +201,27 @@ export default function patchMessageStickerActionSheet() {
     return function() { patches.forEach(function(p) { p?.(); }); };
 }
 
-// ── Button injection strategies ──────────────────────────────────────
+// ── Button injection ─────────────────────────────────────────────────
 function injectButtons(res: any, sticker: StickerNode) {
-    if (!res) {
-        dbg("inject: res null");
-        return;
-    }
+    if (!res) return;
 
     var stickerUrl = getStickerUrl(sticker);
-    dbg("inject: res.type =", res?.type?.name ?? res?.type?.displayName ?? typeof res?.type);
 
-    // Strategy 1: nested view.type (Stealmoji pattern)
+    // Strategy 1: nested view.type
     var view = res?.props?.children?.props?.children;
     if (view && typeof view === "object" && view.type) {
-        dbg("S1: patching nested view.type");
         var unpatchView = after("type", view, function(_: any, component: any) {
             React.useEffect(function() { return unpatchView; }, []);
-            dbg("S1: view rendered");
             addButtonsToComponent(component, sticker, stickerUrl);
         });
         return;
     }
 
-    // Strategy 2: res.type is a function we can wrap
+    // Strategy 2: res.type is a function
     if (res?.type && typeof res.type === "function") {
-        dbg("S2: wrapping res.type");
         var origType = res.type;
         res.type = function() {
             var component = origType.apply(this, arguments);
-            dbg("S2: rendered");
             addButtonsToComponent(component, sticker, stickerUrl);
             return component;
         };
@@ -223,13 +229,11 @@ function injectButtons(res: any, sticker: StickerNode) {
         return;
     }
 
-    // Strategy 3: children is a render function
+    // Strategy 3: children render prop
     if (typeof res?.props?.children === "function") {
-        dbg("S3: wrapping render prop");
         var origRender = res.props.children;
         res.props.children = function() {
             var rendered = origRender.apply(this, arguments);
-            dbg("S3: rendered");
             appendToTree(rendered, <StickerButtons sticker={sticker} />);
             return rendered;
         };
@@ -237,7 +241,6 @@ function injectButtons(res: any, sticker: StickerNode) {
     }
 
     // Strategy 4: brute append
-    dbg("S4: brute append");
     appendToTree(res, <StickerButtons sticker={sticker} />);
 }
 
@@ -265,9 +268,7 @@ function addButtonsToComponent(component: any, sticker: StickerNode, stickerUrl:
 
     if (btnIdx >= 0) {
         btnContainer.splice(btnIdx + 1, 0, el);
-        dbg("Spliced after button idx", btnIdx);
     } else {
-        dbg("No button found, appending");
         appendToTree(component, el);
     }
 }
@@ -276,18 +277,12 @@ function appendToTree(tree: any, element: any) {
     if (!tree) return;
     if (Array.isArray(tree?.props?.children)) {
         tree.props.children.push(element);
-        dbg("append: pushed to children[]");
     } else if (tree?.props?.children != null) {
         tree.props.children = [tree.props.children, element];
-        dbg("append: wrapped+appended");
     } else if (tree?.props) {
         tree.props.children = element;
-        dbg("append: set sole child");
     } else if (Array.isArray(tree)) {
         tree.push(element);
-        dbg("append: pushed to array");
-    } else {
-        dbg("append: nowhere to put it");
     }
 }
 
